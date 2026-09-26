@@ -14,13 +14,13 @@ export interface VocabField {
   key: VocabFieldKey;
   label: string;
   prefKey:
-    | "fieldCategory"
-    | "fieldWord"
-    | "fieldPaperTitle"
-    | "fieldExcerptDate"
-    | "fieldTranslation"
-    | "fieldContextSentence"
-    | "fieldPageLabel";
+  | "fieldCategory"
+  | "fieldWord"
+  | "fieldPaperTitle"
+  | "fieldExcerptDate"
+  | "fieldTranslation"
+  | "fieldContextSentence"
+  | "fieldPageLabel";
   value: (record: VocabRecord) => string;
 }
 
@@ -70,8 +70,9 @@ export const VOCAB_FIELDS: VocabField[] = [
 ];
 
 export function getEnabledVocabFields() {
-  const enabledFields = VOCAB_FIELDS.filter((field) => getPref(field.prefKey));
-  return enabledFields.length ? enabledFields : VOCAB_FIELDS;
+  // const enabledFields = VOCAB_FIELDS.filter((field) => getPref(field.prefKey));
+  // return enabledFields.length ? enabledFields : VOCAB_FIELDS;
+  return VOCAB_FIELDS.filter((field) => getPref(field.prefKey));
 }
 
 export function formatDate(value: string | undefined) {

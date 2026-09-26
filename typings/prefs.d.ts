@@ -19,6 +19,8 @@ declare namespace _ZoteroTypes {
       "fieldPageLabel": boolean;
       "records": string;
       "lastCapturedAt": string;
+      "historyScanVersion": string;
+      "historyScannedAt": string;
     };
   }
 }

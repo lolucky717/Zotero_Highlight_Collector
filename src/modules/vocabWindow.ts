@@ -10,9 +10,14 @@ import {
   getHighlightMappings,
   getMappingForColor,
   setHighlightMappings,
+  validateAndNormalizeMappings,
 } from "./highlightMappings";
 
 export class VocabWindow {
+
+  private static selectedAnnotationKeys = new Set<string>();
+
+
   static registerMenuItem() {
     ztoolkit.Menu.register("menuTools", {
       tag: "menuitem",
@@ -26,8 +31,13 @@ export class VocabWindow {
     const dialogData: { categorySlug: string; loadCallback: () => void } = {
       categorySlug,
       loadCallback: () => {
-        this.renderPanel(addon.data.dialog?.window, records, categorySlug);
+        this.renderPanel(
+          addon.data.dialog?.window,
+          VocabListener.getRecords(),
+          categorySlug,
+        );
       },
+
     };
 
     addon.data.dialog = new ztoolkit.Dialog(1, 1)
@@ -70,14 +80,27 @@ export class VocabWindow {
     }
 
     root.innerHTML = "";
-    const hydratedRecords = records.map((record) => this.withCategory(record));
+    const activeRecords = records
+      .filter(
+        (record) =>
+          !record.sourceState || record.sourceState === "active",
+      )
+      .map((record) => this.withCategory(record));
+
     const visibleRecords =
       categorySlug === "all"
-        ? hydratedRecords
-        : hydratedRecords.filter(
-            (record) => record.categorySlug === categorySlug,
-          );
-    root.append(this.createToolbar(doc, hydratedRecords, categorySlug));
+        ? activeRecords
+        : activeRecords.filter(
+          (record) => record.categorySlug === categorySlug,
+        );
+    //清理selectedAnnotationKeys中不在activeRecords中的annotationKey
+    this.selectedAnnotationKeys.forEach((key) => {
+      if (!activeRecords.some((record) => record.annotationKey === key)) {
+        this.selectedAnnotationKeys.delete(key);
+      }
+    })
+
+    root.append(this.createToolbar(doc, activeRecords, categorySlug));
 
     if (!visibleRecords.length) {
       const empty = doc.createElement("p");
@@ -90,7 +113,7 @@ export class VocabWindow {
     table.style.width = "100%";
     table.style.borderCollapse = "collapse";
     table.style.fontSize = "13px";
-    table.append(this.createHeader(doc));
+    table.append(this.createHeader(doc, visibleRecords));
 
     const body = doc.createElement("tbody");
     for (const record of visibleRecords) {
@@ -136,8 +159,70 @@ export class VocabWindow {
     actions.style.display = "flex";
     actions.style.gap = "8px";
     actions.append(
-      this.createButton(doc, "Export CSV", () => VocabExporter.exportCSV()),
+      this.createButton(doc, "Export selected CSV", () => {
+        const selectedRecords = records.filter((record) =>
+          this.selectedAnnotationKeys.has(record.annotationKey),
+        );
+
+        ztoolkit.log("Export selected CSV", {
+          totalRecords: records.length,
+          selectedKeys: Array.from(this.selectedAnnotationKeys),
+          selectedCount: selectedRecords.length,
+          selectedRecords,
+        });
+
+        if (!selectedRecords.length) {
+          new ztoolkit.ProgressWindow(addon.data.config.addonName)
+            .createLine({
+              text: "No highlights selected for export.",
+              type: "warning",
+            })
+            .show();
+          return;
+        }
+
+        return VocabExporter.exportCSV(selectedRecords);
+      }),
       this.createButton(doc, "Export Anki", () => VocabExporter.exportAnki()),
+      this.createButton(doc, "Refresh", () => {
+        this.refresh(addon.data.dialog?.window);
+      }),
+      this.createButton(doc, "Scan Existing Highlights", async () => {
+        const result = await VocabListener.scanExistHighlights(false);
+
+        if (result.skipped) {
+          new ztoolkit.ProgressWindow(addon.data.config.addonName)
+            .createLine({
+              text: "Historical highlights have already been scanned.",
+              type: "default",
+            })
+            .show();
+          return;
+        }
+
+        this.refresh(addon.data.dialog?.window);
+
+        new ztoolkit.ProgressWindow(addon.data.config.addonName)
+          .createLine({
+            text: `Scanned ${result.scanned} items; imported ${result.updated} highlight(s).`,
+            type: "success",
+          })
+          .show();
+      }),
+      this.createButton(doc, "Rescan Historical Highlights", async () => {
+        const result = await VocabListener.scanExistHighlights(true);
+
+        this.refresh(addon.data.dialog?.window);
+
+        new ztoolkit.ProgressWindow(addon.data.config.addonName)
+          .createLine({
+            text: `Rescanned ${result.scanned} items; imported ${result.updated} highlight(s).`,
+            type: "success",
+          })
+          .show();
+      }),
+
+
     );
     topRow.append(actions);
     wrapper.append(topRow);
@@ -326,24 +411,44 @@ export class VocabWindow {
     button.style.borderRadius = "4px";
     button.style.background = "#f7f7f7";
     button.addEventListener("click", () => {
-      onClick();
+      void Promise.resolve(onClick()).catch((error) => {
+        ztoolkit.log(`Button action  failed:${label}`, error);
+      })
     });
     return button;
   }
-
   private static updateMapping(
     index: number,
     patch: Partial<HighlightMapping>,
-  ) {
+  ): boolean {
     const mappings = getHighlightMappings();
-    mappings[index] = {
-      ...mappings[index],
-      ...patch,
-    };
-    setHighlightMappings(mappings);
-    this.refresh(addon.data.dialog?.window);
-  }
 
+    const updatedMappings = mappings.map((mapping, i) =>
+      i === index
+        ? {
+          ...mapping,
+          ...patch,
+        }
+        : mapping,
+    );
+
+    try {
+      const normalizedMappings =
+        validateAndNormalizeMappings(updatedMappings);
+
+      setHighlightMappings(normalizedMappings);
+      this.refresh(addon.data.dialog?.window);
+
+      return true;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error);
+
+      ztoolkit.log(message);
+
+      return false;
+    }
+  }
   private static styleTextInput(input: HTMLInputElement) {
     input.style.boxSizing = "border-box";
     input.style.width = "100%";
@@ -367,9 +472,43 @@ export class VocabWindow {
     doc.body?.append(datalist);
   }
 
-  private static createHeader(doc: Document) {
+  private static createHeader(doc: Document, records: VocabRecord[]) {
     const header = doc.createElement("thead");
     const row = doc.createElement("tr");
+
+    const selectCell = doc.createElement("th");
+    selectCell.style.padding = "8px";
+    selectCell.style.borderBottom = "1px solid #bbb";
+    selectCell.style.background = "#f6f6f6";
+
+    const selectAll = doc.createElement("input");
+    selectAll.type = "checkbox";
+
+    const selectedCount = records.filter((record) =>
+      this.selectedAnnotationKeys.has(record.annotationKey),
+    ).length;
+
+    selectAll.checked = records.length > 0 && selectedCount === records.length;
+    selectAll.indeterminate =
+      selectedCount > 0 && selectedCount < records.length;
+
+    selectAll.addEventListener("change", () => {
+      if (selectAll.checked) {
+        for (const record of records) {
+          this.selectedAnnotationKeys.add(record.annotationKey);
+        }
+      } else {
+        for (const record of records) {
+          this.selectedAnnotationKeys.delete(record.annotationKey);
+        }
+      }
+
+      this.refresh(addon.data.dialog?.window);
+    });
+
+    selectCell.append(selectAll);
+    row.append(selectCell);
+
     for (const { label } of getEnabledVocabFields()) {
       const cell = doc.createElement("th");
       cell.textContent = label;
@@ -389,7 +528,25 @@ export class VocabWindow {
   private static createRow(doc: Document, record: VocabRecord) {
     const row = doc.createElement("tr");
     const values = getEnabledVocabFields().map((field) => field.value(record));
+    const selectCell = doc.createElement("td");
+    selectCell.style.padding = "8px";
+    selectCell.style.borderBottom = "1px solid #e5e5e5";
+    selectCell.style.verticalAlign = "top";
 
+    const checkbox = doc.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = this.selectedAnnotationKeys.has(record.annotationKey);
+
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        this.selectedAnnotationKeys.add(record.annotationKey);
+      } else {
+        this.selectedAnnotationKeys.delete(record.annotationKey);
+      }
+    });
+
+    selectCell.append(checkbox);
+    row.append(selectCell);
     for (const value of values) {
       const cell = doc.createElement("td");
       cell.textContent = value;
@@ -403,15 +560,12 @@ export class VocabWindow {
   }
 
   private static withCategory(record: VocabRecord): VocabRecord {
-    if (record.categoryLabel && record.categorySlug) {
-      return record;
-    }
-
     const mapping = getMappingForColor(record.annotationColor);
+
     return {
       ...record,
-      categoryLabel: record.categoryLabel || mapping?.label || "",
-      categorySlug: record.categorySlug || mapping?.slug || "",
+      categoryLabel: mapping?.label ?? "",
+      categorySlug: mapping?.slug ?? "",
     };
   }
 }

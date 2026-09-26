@@ -35,12 +35,12 @@ function bindPrefEvents() {
       ztoolkit.log("Highlight Collector enable changed", event);
     });
 
-  doc
-    ?.querySelector(`#zotero-prefpane-${config.addonRef}-grayColors`)
-    ?.addEventListener("change", (event: Event) => {
-      ztoolkit.log("Highlight Collector colors changed", event);
-      updatePrefsUI();
-    });
+  // doc
+  //   ?.querySelector(`#zotero-prefpane-${config.addonRef}-grayColors`)
+  //   ?.addEventListener("change", (event: Event) => {
+  //     ztoolkit.log("Highlight Collector colors changed", event);
+  //     updatePrefsUI();
+  //   });
 }
 
 function updateColorPreview(doc: Document) {
@@ -52,27 +52,27 @@ function updateColorPreview(doc: Document) {
   }
 
   preview.textContent = "";
-  const rawColors = getPref("grayColors");
-  const colors =
-    typeof rawColors === "string"
-      ? rawColors
-          .split(",")
-          .map((color) => color.trim())
-          .filter(Boolean)
-      : [];
+  // const rawColors = getPref("grayColors");
+  // const colors =
+  //   typeof rawColors === "string"
+  //     ? rawColors
+  //         .split(",")
+  //         .map((color) => color.trim())
+  //         .filter(Boolean)
+  //     : [];
 
-  for (const color of colors) {
-    const swatch = doc.createElementNS(
-      "http://www.w3.org/1999/xhtml",
-      "span",
-    ) as HTMLElement;
-    swatch.setAttribute("title", color);
-    swatch.style.display = "inline-block";
-    swatch.style.width = "22px";
-    swatch.style.height = "22px";
-    swatch.style.margin = "2px 6px 6px 0";
-    swatch.style.border = "1px solid #888";
-    swatch.style.background = color;
-    preview.appendChild(swatch);
-  }
+  // for (const color of colors) {
+  //   const swatch = doc.createElementNS(
+  //     "http://www.w3.org/1999/xhtml",
+  //     "span",
+  //   ) as HTMLElement;
+  //   swatch.setAttribute("title", color);
+  //   swatch.style.display = "inline-block";
+  //   swatch.style.width = "22px";
+  //   swatch.style.height = "22px";
+  //   swatch.style.margin = "2px 6px 6px 0";
+  //   swatch.style.border = "1px solid #888";
+  //   swatch.style.background = color;
+  //   preview.appendChild(swatch);
+  // }
 }

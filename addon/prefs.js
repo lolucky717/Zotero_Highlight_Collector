@@ -10,3 +10,8 @@ pref("fieldContextSentence", true);
 pref("fieldPageLabel", true);
 pref("records", "[]");
 pref("lastCapturedAt", "");
+
+
+//历史扫描
+pref("historyScanVersion", "");
+pref("historyScannedAt", "");

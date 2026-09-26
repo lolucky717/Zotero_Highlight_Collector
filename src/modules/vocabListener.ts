@@ -25,6 +25,8 @@ export interface VocabRecord {
   pageLabel?: string;
   createdAt?: string;
   updatedAt: string;
+  sourceState: "active" | "deleted" | "unmatched";
+  sourceUpdatedAt: string;
 }
 
 export class VocabListener {
@@ -76,44 +78,134 @@ export class VocabListener {
     event: string,
     type: string,
     ids: Array<string | number>,
-  ) {
-    if (!getPref("enable")) {
+    extraData: Record<string, unknown>,
+  ): Promise<void> {
+    if (!getPref("enable") || type !== "item") {
       return;
     }
 
-    if (type !== "item" || !["add", "modify"].includes(event)) {
+    if (event === "delete") {
+      this.updateSourceState(ids, "deleted");
+      return;
+    }
+
+    if (!["add", "modify"].includes(event)) {
       return;
     }
 
     const captured: VocabRecord[] = [];
+
     for (const id of ids) {
-      const itemID = Number(id);
-      if (!Number.isFinite(itemID)) {
-        continue;
-      }
+      try {
+        const itemID = Number(id);
 
-      const item = Zotero.Items.get(itemID) as ZoteroItem | false;
-      if (!item || !this.isWatchedHighlightAnnotation(item)) {
-        continue;
-      }
+        if (!Number.isFinite(itemID)) {
+          continue;
+        }
 
-      const record = await this.recordFromAnnotation(item);
-      if (record && this.wasRecentlyCaptured(record)) {
-        continue;
-      }
-      if (record) {
+        const item = Zotero.Items.get(itemID) as ZoteroItem | false;
+
+        if (!item || !this.isWatchedHighlightAnnotation(item)) {
+          this.updateSourceState([itemID], "unmatched");
+          continue;
+        }
+
+        const record = await this.recordFromAnnotation(item);
+
+        if (!record || this.wasRecentlyCaptured(record)) {
+          continue;
+        }
+
         captured.push(record);
+      } catch (error) {
+        ztoolkit.log("Error handling notify event", error);
       }
     }
 
-    if (captured.length) {
-      const changedRecords = this.upsertRecords(captured);
-      if (changedRecords.length) {
-        this.showCaptureToast(changedRecords);
-      }
+    if (!captured.length) {
+      return;
+    }
+
+    const changedRecords = this.upsertRecords(captured);
+
+    if (changedRecords.length) {
+      this.showCaptureToast(changedRecords);
     }
   }
+  static readonly HISTORY_SCAN_VERSION = "1";
+  static readonly HISTORY_SCAN_SIZE = 100;
+  static async scanExistHighlights(force = false): Promise<{
+    scanned: number;
+    captured: number;
+    updated: number;
+    skipped: boolean;
+  }> {
+    if (!force &&
+      getPref("historyScanVersion") === this.HISTORY_SCAN_VERSION
+    ) {
+      return {
+        scanned: 0,
+        captured: 0,
+        updated: 0,
+        skipped: true,
+      };
+    }
 
+    let scanned = 0;
+    let captured = 0;
+    let updated = 0;
+
+    try {
+      for (const library of Zotero.Libraries.getAll()) {
+        const itemIDs = await Zotero.Items.getAll(
+          library.libraryID,
+          false,
+          false,
+          true,
+        );
+
+        for (
+          let start = 0;
+          start < itemIDs.length;
+          start += this.HISTORY_SCAN_SIZE
+        ) {
+          const batchIDs = itemIDs.slice(
+            start,
+            start + this.HISTORY_SCAN_SIZE,
+          );
+
+          const items = await Zotero.Items.getAsync(batchIDs);
+          const records: VocabRecord[] = [];
+
+          for (const item of items) {
+            scanned++;
+
+            if (!this.isWatchedHighlightAnnotation(item)) {
+              continue;
+            }
+
+            const record = await this.recordFromAnnotation(item);
+            if (record) {
+              records.push(record);
+              captured++;
+            }
+          }
+
+          if (records.length) {
+            updated += this.upsertRecords(records).length;
+          }
+        }
+      }
+
+      setPref("historyScanVersion", this.HISTORY_SCAN_VERSION);
+      setPref("historyScannedAt", new Date().toISOString());
+
+      return { scanned, captured, updated, skipped: false };
+    } catch (error) {
+      ztoolkit.log("Historical highlight scan failed", error);
+      throw error;
+    }
+  }
   private static isWatchedHighlightAnnotation(item: ZoteroItem) {
     if (typeof item.isAnnotation === "function" && !item.isAnnotation()) {
       return false;
@@ -179,6 +271,8 @@ export class VocabListener {
       pageLabel: this.cleanText(annotation.annotationPageLabel),
       createdAt: excerptDate,
       updatedAt: now,
+      sourceState: "active",
+      sourceUpdatedAt: now,
     };
   }
 
@@ -220,16 +314,77 @@ export class VocabListener {
     return changedRecords;
   }
 
+  // static getRecords(): VocabRecord[] {
+  //   try {
+  //     const raw = getPref("records");
+  //     return typeof raw === "string" ? JSON.parse(raw) : [];
+  //   } catch (error) {
+  //     ztoolkit.log("Failed to parse vocab records", error);
+  //     return [];
+  //   }
+  // }
+  private static updateSourceState(
+    ids: Array<string | number>,
+    sourceState: VocabRecord["sourceState"],
+  ): void {
+    const annotationIDs = new Set(
+      ids.map(Number).filter((id) => Number.isFinite(id)),
+    );
+
+    if (!annotationIDs.size) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    let changed = false;
+
+    const nextRecords = this.getRecords().map((record) => {
+      if (!annotationIDs.has(record.annotationID)) {
+        return record;
+      }
+
+      if (record.sourceState === sourceState) {
+        return record;
+      }
+
+      changed = true;
+      return {
+        ...record,
+        sourceState,
+        sourceUpdatedAt: now,
+        updatedAt: now,
+      };
+    });
+
+    if (changed) {
+      setPref("records", JSON.stringify(nextRecords));
+    }
+  }
   static getRecords(): VocabRecord[] {
     try {
       const raw = getPref("records");
-      return typeof raw === "string" ? JSON.parse(raw) : [];
+      if (typeof raw !== "string") {
+        return [];
+      }
+
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        throw new Error("records must be an array");
+      }
+
+      return parsed.filter(
+        (record): record is VocabRecord =>
+          typeof record === "object" &&
+          record !== null &&
+          typeof (record as VocabRecord).annotationKey === "string" &&
+          typeof (record as VocabRecord).annotationID === "number" &&
+          typeof (record as VocabRecord).text === "string",
+      );
     } catch (error) {
       ztoolkit.log("Failed to parse vocab records", error);
       return [];
     }
   }
-
   private static showCaptureToast(records: VocabRecord[]) {
     const preview = records
       .slice(0, 3)
@@ -287,6 +442,7 @@ export class VocabListener {
       "libraryID",
       "pageLabel",
       "createdAt",
+      "sourceState",
     ];
 
     return keys.every((key) => existing[key] === next[key]);

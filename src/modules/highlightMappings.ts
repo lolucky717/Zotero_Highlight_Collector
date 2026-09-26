@@ -28,32 +28,33 @@ export const DEFAULT_MAPPINGS: HighlightMapping[] = [
   { color: "#b983ff", label: "Idea", slug: "idea" },
 ];
 
-export function getHighlightMappings() {
-  const mappings = parseMappings(getPref("highlightMappings"));
-  if (mappings.length) {
-    return mappings;
+export function migrateLegacyMappings(): void {
+  const current = parseMappings(getPref("highlightMappings"));
+  if (current.length) {
+    return;
   }
 
-  const legacyMappings = getLegacyGrayColorMappings();
-  return legacyMappings.length ? legacyMappings : DEFAULT_MAPPINGS;
+  const legacy = getLegacyGrayColorMappings();
+  if (legacy.length) {
+    setPref("highlightMappings", JSON.stringify(legacy));
+  }
 }
 
-export function setHighlightMappings(mappings: HighlightMapping[]) {
-  const cleanedMappings = mappings
-    .map((mapping) => ({
-      color: normalizeColor(mapping.color),
-      label: cleanLabel(mapping.label),
-      slug: cleanSlug(mapping.slug || mapping.label),
-    }))
-    .filter((mapping) => mapping.color && mapping.label);
 
+
+
+export function getHighlightMappings() {
+  const mappings = parseMappings(getPref("highlightMappings"));
+  return mappings.length ? mappings : DEFAULT_MAPPINGS;
+
+  // const legacyMappings = getLegacyGrayColorMappings();
+  // return legacyMappings.length ? legacyMappings : DEFAULT_MAPPINGS;
+}
+
+export function setHighlightMappings(mappings: HighlightMapping[]): void {
+  const cleanedMappings = validateAndNormalizeMappings(mappings);
   setPref("highlightMappings", JSON.stringify(cleanedMappings));
-  setPref(
-    "grayColors",
-    cleanedMappings.map((mapping) => mapping.color).join(","),
-  );
 }
-
 export function getMappingForColor(color: string | undefined) {
   const normalizedColor = normalizeColor(color);
   if (!normalizedColor) {
@@ -143,4 +144,31 @@ function getLegacyGrayColorMappings() {
 
 function cleanLabel(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+export function validateAndNormalizeMappings(
+  mappings: HighlightMapping[],
+): HighlightMapping[] {
+  const colors = new Set<string>();
+  const slugs = new Set<string>();
+
+  return mappings.map((mapping) => {
+    const color = normalizeColor(mapping.color);
+    const label = cleanLabel(mapping.label);
+    const slug = cleanSlug(mapping.slug || label);
+
+    if (!color || !label) {
+      throw new Error("颜色和类别名称不能为空。");
+    }
+    if (colors.has(color)) {
+      throw new Error(`颜色 ${color} 已被映射，请勿重复。`);
+    }
+    if (slugs.has(slug)) {
+      throw new Error(`类别标识 ${slug} 已被使用，请勿重复。`);
+    }
+
+    colors.add(color);
+    slugs.add(slug);
+    return { color, label, slug };
+  });
 }

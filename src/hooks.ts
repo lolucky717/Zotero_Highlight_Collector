@@ -3,7 +3,7 @@ import { registerPrefsScripts } from "./modules/preferenceScript";
 import { createZToolkit } from "./utils/ztoolkit";
 import { VocabListener } from "./modules/vocabListener";
 import { VocabWindow } from "./modules/vocabWindow";
-
+import { migrateLegacyMappings } from "./modules/highlightMappings";
 async function onStartup() {
   await Promise.all([
     Zotero.initializationPromise,
@@ -11,6 +11,7 @@ async function onStartup() {
     Zotero.uiReadyPromise,
   ]);
 
+  migrateLegacyMappings();
   initLocale();
 
   Zotero.PreferencePanes.register({
@@ -69,7 +70,7 @@ async function onNotify(
   extraData: { [key: string]: any },
 ) {
   ztoolkit.log("notify", event, type, ids, extraData);
-  await VocabListener.handleNotify(event, type, ids);
+  await VocabListener.handleNotify(event, type, ids, extraData);
 }
 
 /**
